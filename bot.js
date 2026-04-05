@@ -13,7 +13,7 @@ bot.command('link', (ctx) => {
 const vbr = `https://msng.link/vi/${numbr}`;
 
     // Текст с HTML тегом <a>
-    const messageText = `Вот соцсети (некоторые могут не работать):\n\n🟣V1ber \n <a href="${vbr}">Viber</a>`;
+    const messageText = `Вот линки (некоторые могут не работать):\n\n🟣V1ber \n <a href="${vbr}">Viber</a>`;
 ctx.reply(messageText, {
         parse_mode: 'Markdown', 
         ...Markup.inlineKeyboard([
