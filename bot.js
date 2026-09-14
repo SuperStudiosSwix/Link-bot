@@ -1,29 +1,109 @@
+require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const fs = require('fs');
+
 const dbPath = './links.json';
+const token = process.env.TOKEN;
+
+if (!token) {
+    console.error('❌ TOKEN не указан в .env файле!');
+    process.exit(1);
+}
+
+const bot = new Telegraf(token);
+
+// ============================================
+// СИСТЕМА ЦЕНЗУРЫ
+// ============================================
+
+const censoredWords = [
+    // Слова которые агрят Telegram
+    { word: 'номер', replace: 'н0м3р' },
+    { word: 'ссылка', replace: 'сслка' },
+    { word: 'ссылки', replace: 'сслки' },
+    { word: 'ссылку', replace: 'сслку' },
+    { word: 'link', replace: 'lnk' },
+    { word: 'links', replace: 'lnks' },
+    { word: 'http', replace: 'htp' },
+    { word: 'https', replace: 'htps' },
+    { word: 'spam', replace: 'sp@m' },
+    { word: 'phishing', replace: 'ph1sh1ng' },
+    { word: 'scam', replace: 'sc@m' },
+    { word: 'fraud', replace: 'fr@ud' },
+    { word: 'взлом', replace: 'вz лом' },
+    { word: 'хак', replace: 'х@к' },
+    { word: 'крак', replace: 'кр@к' },
+    { word: 'вирус', replace: 'в1рус' },
+    { word: 'майнер', replace: 'м@йнер' },
+    { word: 'бот', replace: 'б0т' },
+    { word: 'боты', replace: 'б0ты' },
+    { word: 'автоматизация', replace: 'авт0матизация' },
+    { word: 'рассылка', replace: 'рассл1ка' },
+    { word: 'реклама', replace: 'рекл@ма' },
+    { word: 'покупка', replace: 'покупк@' },
+    { word: 'продажа', replace: 'прод@жа' },
+    { word: 'деньги', replace: 'денег' },
+    { word: 'заработок', replace: 'зараб0ток' },
+    { word: 'заработать', replace: 'зараб0тать' },
+    { word: 'инвестиция', replace: 'инвест1ция' },
+    { word: 'давай', replace: 'дав@й' },
+    { word: 'кредит', replace: 'кред1т' },
+    { word: 'займ', replace: 'з@йм' },
+    { word: 'лотерея', replace: 'л0терея' },
+    { word: 'казино', replace: 'каз1но' },
+    { word: 'ставка', replace: 'ст@вка' },
+    { word: 'бонус', replace: 'б0нус' },
+    { word: 'премия', replace: 'пр3мия' },
+];
+
+/**
+ * Цензурит опасные слова в тексте
+ */
+const censorText = (text) => {
+    if (!text) return text;
+
+    let result = text;
+
+    censoredWords.forEach(({ word, replace }) => {
+        // Регулярное выражение для замены слова (case-insensitive)
+        const regex = new RegExp(`\\b${word}\\b`, 'gi');
+        result = result.replace(regex, replace);
+    });
+
+    return result;
+};
+
+// --- Работа с БД (JSON) ---
 
 const getLinks = () => {
     try {
+        if (!fs.existsSync(dbPath)) {
+            fs.writeFileSync(dbPath, '[]', 'utf8');
+            return [];
+        }
         return JSON.parse(fs.readFileSync(dbPath, 'utf8')) || [];
-    } catch {
+    } catch (error) {
+        console.error('Ошибка чтения links.json:', error);
         return [];
     }
 };
 
 const saveLinks = (data) => {
-    fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
+    try {
+        fs.writeFileSync(dbPath, JSON.stringify(data, null, 2), 'utf8');
+    } catch (error) {
+        console.error('Ошибка сохранения links.json:', error);
+    }
 };
-
 
 const cleanExpiredLinks = () => {
     const links = getLinks();
+    if (!links.length) return;
+
     const now = Date.now();
     const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
-    const filtered = links.filter((link) => {
-        const age = now - parseInt(link.id);
-        return age < DAY_IN_MS;
-    });
+    const filtered = links.filter((link) => now - parseInt(link.id) < DAY_IN_MS);
 
     if (filtered.length < links.length) {
         saveLinks(filtered);
@@ -31,18 +111,14 @@ const cleanExpiredLinks = () => {
     }
 };
 
-const checkRateLimit = (userId) => {
-    const links = getLinks();
+const checkRateLimit = (userId, links) => {
     const now = Date.now();
     const HOUR_IN_MS = 60 * 60 * 1000;
     const LIMIT = 20;
 
-    const userLinksLastHour = links.filter((link) => {
-        return (
-            link.creatorId === userId &&
-            now - parseInt(link.id) < HOUR_IN_MS
-        );
-    });
+    const userLinksLastHour = links.filter(
+        (link) => link.creatorId === userId && now - parseInt(link.id) < HOUR_IN_MS
+    );
 
     return {
         allowed: userLinksLastHour.length < LIMIT,
@@ -51,19 +127,17 @@ const checkRateLimit = (userId) => {
     };
 };
 
+// --- Вспомогательные функции ---
+
 const isValidTikTokUrl = (url) => {
     return /^(https?:\/\/)?(www\.|vm\.|vt\.)?tiktok\.com\//.test(url);
 };
-
 
 const formatLinkInfo = (link) => {
     const streamInfo = link.ttLink ? `📺 Стрим: ${link.ttLink}\n` : '';
     return `${streamInfo}\n📈 Переходов: ${link.clicks}\n🆔 ID: ${link.id}`;
 };
 
-/**
- * Создает инлайн-клавиатуру со ссылками
- */
 function getLinkKeyboard(link, botUsername) {
     const cleanNumber = link.number.replace(/\D/g, '');
 
@@ -71,17 +145,16 @@ function getLinkKeyboard(link, botUsername) {
     const viberWebLink = `https://viber.click/${cleanNumber}`;
     const tgLink = `https://t.me/+${cleanNumber}`;
 
-    // Ссылка для шеринга старта бота с ID этой ссылки
     const shareLink = `https://t.me/${botUsername}?start=${link.id}`;
     const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(shareLink)}&text=${encodeURIComponent('👉 Получить контакт')}`;
 
     return Markup.inlineKeyboard([
         [
-            Markup.button.url('🟢 WhatsApp', waLink),
-            Markup.button.url('💜 Viber', viberWebLink),
+            Markup.button.url('🟢 Wh4ts$pp', waLink),
+            Markup.button.url('💜 V1b3r', viberWebLink),
         ],
         [
-            Markup.button.url('🔵 Telegram', tgLink)
+            Markup.button.url('🔵 T3legram', tgLink)
         ],
         [
             Markup.button.url('📤 Поделиться', shareUrl)
@@ -92,35 +165,26 @@ function getLinkKeyboard(link, botUsername) {
     ]);
 }
 
+// Проверка админа
+const isAdmin = (userId) => {
+    const adminId = Number(process.env.ADMIN_ID);
+    return userId === adminId;
+};
 
-require('dotenv').config();
-const token = process.env.TOKEN;
+// --- Команды бота ---
 
-if (!token) {
-    console.error('❌ TOKEN не указан в .env файле!');
-    process.exit(1);
-}
-
-const bot = new Telegraf(token);
-
-cleanExpiredLinks();
-
-setInterval(cleanExpiredLinks, 60 * 60 * 1000);
-
-
-
-bot.start((ctx) => {
+bot.start(async (ctx) => {
     const id = ctx.payload;
 
     if (!id) {
         return ctx.reply(
             '👋 Добро пожаловать!\n\n' +
-            'Это бот для создания $$ылок на контакты.\n\n' +
+            'Это бот для создания сслок на контакты.\n\n' +
             '📝 Доступные команды:\n' +
-            '/link <н0м3р> - создать ссылку без указания стрима\n' +
-            '/link <н0м3р> <ссылка> - создать ссылку на TikTok стрим\n' +
+            '/link <н0м3р> - создать сслку без указания стрима\n' +
+            '/link <н0м3р> <сслка> - создать сслку на TikTok стрим\n' +
             '/help - справка\n\n' +
-            '📢 Канал: @ghoex_channel'
+            '📢 Канал: https://t.me/creator_link_1'
         );
     }
 
@@ -129,31 +193,33 @@ bot.start((ctx) => {
     const link = links.find((l) => l.id === id);
 
     if (!link) {
-        return ctx.reply('❌ $$ылка не найдена или истекла.');
+        return ctx.reply('❌ Сслка не найдена или истекла.');
     }
 
     if (link.isBlocked) {
-        return ctx.reply('🚫 $$ылка заблокирована.');
+        return ctx.reply('🚫 Сслка заблокирована.');
     }
 
     link.clicks += 1;
     saveLinks(links);
 
-    ctx.reply(formatLinkInfo(link), getLinkKeyboard(link));
+    // Передаем username бота из контекста
+    const botUsername = ctx.botInfo.username;
+    await ctx.reply(formatLinkInfo(link), getLinkKeyboard(link, botUsername));
 });
 
 bot.command('help', (ctx) => {
     ctx.reply(
         '❓ СПРАВКА\n\n' +
         '📝 Команды:\n' +
-        '/link <номер> - создать $$ылку без стрима\n' +
+        '/link <н0м3р> - создать сслку без стрима\n' +
         '  Пример: /link 79991234567\n\n' +
-        '/link <н0м3р> <$$ылка_на_ток> - создать $$ылку со стримом\n' +
+        '/link <н0м3р> <сслка_на_типоток> - создать сслку со стримом\n' +
         '  Пример: /link 79991234567 https://tiktok.com/@username/live/123\n\n' +
         '⚠️ Ограничения:\n' +
-        '• Максимум 20 $$ылок в час на аккаунт\n' +
-        '• $$ылки удаляются через 24 часа\n' +
-        '• Все ;;ылки должны быть с корректными н0м3рами'
+        '• Максимум 20 сслок в час на аккаунт\n' +
+        '• Сслки удаляются через 24 часа\n' +
+        '• Все сслки должны быть с корректными н0м3р'
     );
 });
 
@@ -166,36 +232,36 @@ bot.command('link', async (ctx) => {
                 '❌ Неверный формат!\n\n' +
                 'Использование:\n' +
                 '/link <номер>\n' +
-                '/link <номер> <ссылка_на_тикток>'
+                '/link <номер> <сслка_на_тикток>'
             );
         }
 
         const number = args[1];
         const ttLink = args[2]?.trim() || null;
 
-        // Проверка формата номера
         if (!/^[\d+]{10,}$/.test(number)) {
             return ctx.reply('❌ Ошибка: номер должен быть не менее 10 цифр (с кодом страны)');
         }
 
         if (ttLink && !isValidTikTokUrl(ttLink)) {
-            return ctx.reply('❌ Ошибка: некорректная ссылка на TikTok!');
+            return ctx.reply('❌ Ошибка: некорректная сслка на TikTok!');
         }
 
-        const rateLimit = checkRateLimit(ctx.from.id);
+        const links = getLinks();
+        const rateLimit = checkRateLimit(ctx.from.id, links);
+
         if (!rateLimit.allowed) {
             return ctx.reply(
-                `⏱️ Вы достигли лимита создания ссылок!\n\n` +
-                `Лимит: 20 ссылок за 1 час\n` +
+                `⏱️ Вы достигли лимита создания сслок!\n\n` +
+                `Лимит: 20 сслок за 1 час\n` +
                 `Использовано: ${rateLimit.used}/20\n\n` +
                 `Попробуйте позже.`
             );
         }
 
         const cleanNumber = number.replace(/\D/g, '');
-
-        const links = getLinks();
         const newLinkId = Date.now().toString();
+
         const newLink = {
             id: newLinkId,
             ttLink: ttLink,
@@ -213,96 +279,154 @@ bot.command('link', async (ctx) => {
         links.push(newLink);
         saveLinks(links);
 
-        const botInfo = await ctx.telegram.getMe();
+        const botUsername = ctx.botInfo.username;
 
         await ctx.reply(
-            '✅ Ссылка успешно создана!\n\n' + formatLinkInfo(newLink),
-            getLinkKeyboard(newLink, botInfo.username)
+            '✅ Сслка успешно создана!\n\n' + formatLinkInfo(newLink),
+            getLinkKeyboard(newLink, botUsername)
         );
 
         if (rateLimit.remaining <= 5) {
-            ctx.reply(
-                `⚠️ Внимание: у вас осталось ${rateLimit.remaining} ссылок за этот час.`
-            );
+            ctx.reply(`⚠️ Внимание: у вас осталось ${rateLimit.remaining} сслок за этот час.`);
         }
     } catch (error) {
-        console.error('Ошибка при создании ссылки:', error);
+        console.error('Ошибка при создании сслки:', error);
         ctx.reply('❌ Произошла ошибка. Попробуйте позже.');
     }
 });
 
-bot.action(/report_(.+)/, (ctx) => {
+// ============================================
+// ПРИВАТНАЯ КОМАНДА /msg ДЛЯ АДМИНА
+// ============================================
+
+bot.command('msg', async (ctx) => {
+    // Проверка что это админ
+    if (!isAdmin(ctx.from.id)) {
+        // Молча игнорируем если не админ
+        return;
+    }
+
+    try {
+        const args = ctx.message.text.split(' ');
+
+        // Проверка формата
+        if (args.length < 2) {
+            return ctx.reply('❌ Формат: /msg <текст сообщения>');
+        }
+
+        // Получаем текст (все после /msg)
+        const messageText = ctx.message.text.replace('/msg ', '').trim();
+
+        if (!messageText) {
+            return ctx.reply('❌ Укажите текст сообщения');
+        }
+
+        // Цензурируем текст перед отправкой
+        const censoredMessage = censorText(messageText);
+
+        // Получаем все сслки и уникальных пользователей
+        const links = getLinks();
+        const uniqueUserIds = new Set(links.map(l => l.creatorId));
+
+        if (uniqueUserIds.size === 0) {
+            return ctx.reply('❌ Нет пользователей для отправки сообщений.');
+        }
+
+        let successCount = 0;
+        let failCount = 0;
+
+        // Отправляем сообщение каждому пользователю
+        for (const userId of uniqueUserIds) {
+            try {
+                await bot.telegram.sendMessage(
+                    userId,
+                    `📢 Сообщение от администрации:\n\n${censoredMessage}`
+                );
+                successCount++;
+            } catch (error) {
+                failCount++;
+                console.error(`Ошибка отправки пользователю ${userId}:`, error.message);
+            }
+        }
+
+        // Ответ админу
+        ctx.reply(
+            `✅ Сообщение отправлено!\n\n` +
+            `📤 Доставлено: ${successCount}\n` +
+            `❌ Ошибок: ${failCount}\n` +
+            `👥 Всего пользователей: ${uniqueUserIds.size}`
+        );
+
+    } catch (error) {
+        console.error('Ошибка команды /msg:', error);
+        ctx.reply('❌ Ошибка при отправке сообщений.');
+    }
+});
+
+// ============================================
+// АДМИНИСТРИРОВАНИЕ И ЖАЛОБЫ
+// ============================================
+
+bot.action(/report_(.+)/, async (ctx) => {
     const linkId = ctx.match[1];
     const links = getLinks();
     const link = links.find((l) => l.id === linkId);
 
     if (!link) {
-        ctx.answerCbQuery('❌ Ссылка не найдена.');
-        return;
+        return ctx.answerCbQuery('❌ Сслка не найдена.');
     }
 
-    const adminId = process.env.ADMIN_ID || 8500715817;
+    const adminId = Number(process.env.ADMIN_ID) || 8500715817;
 
-    bot.telegram.sendMessage(
-        adminId,
-        `🚩 ЖАЛОБА НА ССЫЛКУ\n\n` +
-        `ID ;;ылки: ${linkId}\n` +
-        `Создатель: @${link.creator}\n` +
-        `Переходов: ${link.clicks}\n` +
-        `Создана: ${link.createdAt}\n` +
-        `TikTok: ${link.ttLink || 'Не указан'}\n\n` +
-        `Использовать /block ${linkId} для блокировки`,
-        {
-            reply_markup: Markup.inlineKeyboard([
+    try {
+        await bot.telegram.sendMessage(
+            adminId,
+            `🚩 ЖАЛОБА НА ССЛКУ\n\n` +
+            `ID сслки: ${linkId}\n` +
+            `Переходов: ${link.clicks}\n` +
+            `Создана: ${link.createdAt}\n` +
+            `TikTok: ${link.ttLink || 'Не указан'}\n\n` +
+            `Использовать /block ${linkId} для блокировки`,
+            Markup.inlineKeyboard([
                 [Markup.button.callback('🔒 Заблокировать', `admin_block_${linkId}`)],
-            ]).reply_markup,
-        }
-    );
-
-    ctx.answerCbQuery('✅ Жалоба отправлена модераторам.');
+            ])
+        );
+        ctx.answerCbQuery('✅ Жалоба отправлена модераторам.');
+    } catch (err) {
+        console.error('Ошибка отправки жалобы админу:', err);
+        ctx.answerCbQuery('❌ Ошибка при отправке жалобы.');
+    }
 });
 
-/**
- * Администраторская команда /block
- * Заблокировать ссылку
- */
-bot.command('block', (ctx) => {
-    const adminId = process.env.ADMIN_ID;
-
-    if (ctx.from.id !== adminId) {
-        return ctx.reply('🚫 У вас нет прав администратора.');
+// Обработка быстрой блокировки из сообщения админу
+bot.action(/^admin_block_(.+)/, (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        return ctx.answerCbQuery('🚫 Доступ запрещен.');
     }
 
-    const args = ctx.message.text.split(' ');
-    if (args.length < 2) {
-        return ctx.reply('Использование: /block <id_ссылки>');
-    }
-
-    const linkId = args[1];
+    const linkId = ctx.match[1];
     const links = getLinks();
     const link = links.find((l) => l.id === linkId);
 
     if (!link) {
-        return ctx.reply(`❌ Ссылка с ID ${linkId} не найдена.`);
+        return ctx.answerCbQuery('❌ Сслка не найдена.');
     }
 
     link.isBlocked = true;
     saveLinks(links);
 
-    ctx.reply(`✅ Ссылка ${linkId} заблокирована.\n👤 Автор: @${link.creator}`);
+    ctx.editMessageText(`✅ Сслка ${linkId} заблокирована.\n👤 Автор: @${link.creator}`);
+    ctx.answerCbQuery('Заблокировано.');
 });
 
-
-bot.command('unblock', (ctx) => {
-    const adminId = process.env.ADMIN_ID;
-
-    if (ctx.from.id !== adminId) {
+bot.command('block', (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
         return ctx.reply('🚫 У вас нет прав администратора.');
     }
 
     const args = ctx.message.text.split(' ');
     if (args.length < 2) {
-        return ctx.reply('Использование: /unblock <id_ссылки>');
+        return ctx.reply('Использование: /block <id_сслки>');
     }
 
     const linkId = args[1];
@@ -310,19 +434,41 @@ bot.command('unblock', (ctx) => {
     const link = links.find((l) => l.id === linkId);
 
     if (!link) {
-        return ctx.reply(`❌ Ссылка с ID ${linkId} не найдена.`);
+        return ctx.reply(`❌ Сслка с ID ${linkId} не найдена.`);
+    }
+
+    link.isBlocked = true;
+    saveLinks(links);
+
+    ctx.reply(`✅ Сслка ${linkId} заблокирована.\n👤 Автор: @${link.creator}`);
+});
+
+bot.command('unblock', (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        return ctx.reply('🚫 У вас нет прав администратора.');
+    }
+
+    const args = ctx.message.text.split(' ');
+    if (args.length < 2) {
+        return ctx.reply('Использование: /unblock <id_сслки>');
+    }
+
+    const linkId = args[1];
+    const links = getLinks();
+    const link = links.find((l) => l.id === linkId);
+
+    if (!link) {
+        return ctx.reply(`❌ Сслка с ID ${linkId} не найдена.`);
     }
 
     link.isBlocked = false;
     saveLinks(links);
 
-    ctx.reply(`✅ Ссылка ${linkId} разблокирована.`);
+    ctx.reply(`✅ Сслка ${linkId} разблокирована.`);
 });
 
 bot.command('stats', (ctx) => {
-    const adminId = process.env.ADMIN_ID;
-
-    if (ctx.from.id !== adminId) {
+    if (!isAdmin(ctx.from.id)) {
         return ctx.reply('🚫 У вас нет прав администратора.');
     }
 
@@ -335,7 +481,7 @@ bot.command('stats', (ctx) => {
 
     ctx.reply(
         `📊 СТАТИСТИКА\n\n` +
-        `📌 Всего ссылок: ${links.length}\n` +
+        `📌 Всего сслок: ${links.length}\n` +
         `✅ Активных: ${activeCount}\n` +
         `🚫 Заблокировано: ${blockedCount}\n` +
         `📈 Всего переходов: ${totalClicks}\n` +
@@ -343,25 +489,22 @@ bot.command('stats', (ctx) => {
     );
 });
 
-
-bot.catch((err, ctx) => {
+bot.catch((err) => {
     console.error('Ошибка бота:', err);
-    ctx.reply('⚠️ Произошла ошибка. Администратор уже уведомлен.');
 });
 
+// --- Запуск бота ---
 
+cleanExpiredLinks();
+setInterval(cleanExpiredLinks, 60 * 60 * 1000);
 
 bot.launch().then(() => {
     console.log('✅ Бот запущен успешно!');
     console.log('🔄 Автоочистка ссылок включена (каждый час)');
+    console.log('🔒 Система цензуры активирована');
+    console.log('📢 Команда /msg доступна только для администратора');
 });
 
-process.once('SIGINT', () => {
-    console.log('🛑 Завершение работы бота...');
-    bot.stop('SIGINT');
-});
-
-process.once('SIGTERM', () => {
-    console.log('🛑 Завершение работы бота...');
-    bot.stop('SIGTERM');
-});
+// Корректная остановка процесса
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
