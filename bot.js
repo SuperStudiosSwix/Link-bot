@@ -161,21 +161,18 @@ const formatLinkInfo = (link) => {
     return `${streamInfo}\n📈 Переходов: ${link.clicks}\n🆔 ID: ${link.id}`;
 };
 
+// Клавиатура для обычного сообщения бота (с кнопкой Пожаловаться)
 function getLinkKeyboard(link, botUsername) {
-    const cleanNumber = link.number.replace(/\D/g, '');
-    const waLink = `https://wa.me/${cleanNumber}`;
-    const viberWebLink = `https://viber.click/${cleanNumber}`;
-    const tgLink = `https://t.me/+${cleanNumber}`;
     const shareLink = `https://t.me/${botUsername}?start=${link.id}`;
     const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(shareLink)}&text=${encodeURIComponent('👉 Получить контакт')}`;
 
     return Markup.inlineKeyboard([
         [
-            Markup.button.url('🟢 Wh4ts$pp', waLink),
-            Markup.button.url('💜 V1b3r', viberWebLink),
+            Markup.button.callback('🟢 WhatsApp', `get_wa_${link.id}`),
+            Markup.button.callback('💜 Viber', `get_vb_${link.id}`),
         ],
         [
-            Markup.button.url('🔵 T3legram', tgLink)
+            Markup.button.callback('🔵 Telegram', `get_tg_${link.id}`)
         ],
         [
             Markup.button.url('📤 Поделиться', shareUrl)
@@ -184,28 +181,86 @@ function getLinkKeyboard(link, botUsername) {
             Markup.button.callback('🚩 Пожаловаться', `report_${link.id}`)
         ]
     ]);
+
+}
+// Вспомогательная функция отправки ссылки с автоудалением через 2 минуты
+async function sendTemporaryLink(ctx, title, url, emoji) {
+    try {
+        await ctx.answerCbQuery();
+
+        const messageText = `${emoji} **Переход в ${title}:**\n${url}\n\n⏱️ _Сообщение автоматически удалится через 2 минуты._`;
+
+        const sentMessage = await ctx.reply(messageText, {
+            parse_mode: 'Markdown',
+            disable_web_page_preview: true,
+            reply_markup: Markup.inlineKeyboard([
+                [Markup.button.callback('❌ Закрыть сейчас', 'delete_msg')]
+            ]).reply_markup
+        });
+
+        // Таймер автоудаления сообщения через 2 минуты
+        setTimeout(() => {
+            ctx.telegram.deleteMessage(ctx.chat.id, sentMessage.message_id).catch(() => {});
+        }, 120000);
+
+    } catch (error) {
+        console.error('Ошибка при отправке ссылки:', error);
+    }
 }
 
-// Keyboard для inline-результата (без кнопки "Пожаловаться" — она не работает в inline)
-function getInlineLinkKeyboard(link, botUsername) {
+// Кнопка моментального закрытия сообщения пользователем
+bot.action('delete_msg', (ctx) => {
+    ctx.deleteMessage().catch(() => {});
+});
+
+// Обработчики кнопок мессенджеров
+bot.action(/^get_wa_(.+)/, (ctx) => {
+    const linkId = ctx.match[1];
+    const links = getLinks();
+    const link = links.find((l) => l.id === linkId);
+
+    if (!link || link.isBlocked) {
+        return ctx.answerCbQuery('❌ Ссылка недоступна или заблокирована.', { show_alert: true });
+    }
+
     const cleanNumber = link.number.replace(/\D/g, '');
-    const waLink = `https://wa.me/${cleanNumber}`;
-    const viberWebLink = `https://viber.click/${cleanNumber}`;
-    const tgLink = `https://t.me/+${cleanNumber}`;
-    const shareLink = `https://t.me/${botUsername}?start=${link.id}`;
-    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(shareLink)}&text=${encodeURIComponent('👉 Получить контакт')}`;
+    sendTemporaryLink(ctx, 'WhatsApp', `https://wa.me/${cleanNumber}`, '🟢');
+});
+
+bot.action(/^get_vb_(.+)/, (ctx) => {
+    const linkId = ctx.match[1];
+    const links = getLinks();
+    const link = links.find((l) => l.id === linkId);
+
+    if (!link || link.isBlocked) {
+        return ctx.answerCbQuery('❌ Ссылка недоступна или заблокирована.', { show_alert: true });
+    }
+
+    const cleanNumber = link.number.replace(/\D/g, '');
+    sendTemporaryLink(ctx, 'Viber', `https://viber.click/${cleanNumber}`, '💜');
+});
+
+bot.action(/^get_tg_(.+)/, (ctx) => {
+    const linkId = ctx.match[1];
+    const links = getLinks();
+    const link = links.find((l) => l.id === linkId);
+
+    if (!link || link.isBlocked) {
+        return ctx.answerCbQuery('❌ Ссылка недоступна или заблокирована.', { show_alert: true });
+    }
+
+    const cleanNumber = link.number.replace(/\D/g, '');
+    sendTemporaryLink(ctx, 'Telegram', `https://t.me/+${cleanNumber}`, '🔵');
+});
+// Inline-клавиатура (так как callback_data не всегда поддерживается в inline без сервера,
+// лучше перенаправлять пользователя в приватный диалог с ботом)
+function getInlineLinkKeyboard(link, botUsername) {
+    const botStartUrl = `https://t.me/${botUsername}?start=${link.id}`;
 
     return Markup.inlineKeyboard([
         [
-            Markup.button.url('🟢 Wh4ts$pp', waLink),
-            Markup.button.url('💜 V1b3r', viberWebLink),
-        ],
-        [
-            Markup.button.url('🔵 T3legram', tgLink)
-        ],
-        [
-            Markup.button.url('📤 Поделиться', shareUrl)
-        ],
+            Markup.button.url('📲 Открыть контакт в боте', botStartUrl)
+        ]
     ]);
 }
 
@@ -330,6 +385,7 @@ bot.on('inline_query', async (ctx) => {
 
     return ctx.answerInlineQuery(results, { cache_time: 0 });
 });
+// Обработка перехода в WhatsApp
 
 bot.start(async (ctx) => {
     registerUser(ctx.from);
