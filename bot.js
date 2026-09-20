@@ -176,9 +176,6 @@ function getLinkKeyboard(link, botUsername) {
         ],
         [
             Markup.button.url('📤 Поделиться', shareUrl)
-        ],
-        [
-            Markup.button.callback('🚩 Пожаловаться', `report_${link.id}`)
         ]
     ]);
 
@@ -590,84 +587,6 @@ bot.command('msg', async (ctx) => {
     }
 });
 
-bot.action(/report_(.+)/, async (ctx) => {
-    const linkId = ctx.match[1];
-    const links = getLinks();
-    const link = links.find((l) => l.id === linkId);
-
-    if (!link) return ctx.answerCbQuery('❌ Сслка не найдена.');
-
-    const adminId = Number(process.env.ADMIN_ID) || 8500715817;
-
-    try {
-        await bot.telegram.sendMessage(
-            adminId,
-            `🚩 ЖАЛОБА НА ССЛКУ\n\n` +
-            `ID сслки: ${linkId}\n` +
-            `Переходов: ${link.clicks}\n` +
-            `Создана: ${link.createdAt}\n` +
-            `TikTok: ${link.ttLink || 'Не указан'}\n\n` +
-            `Использовать /block ${linkId} для блокировки`,
-            Markup.inlineKeyboard([
-                [Markup.button.callback('🔒 Заблокировать', `admin_block_${linkId}`)],
-            ])
-        );
-        ctx.answerCbQuery('✅ Жалоба отправлена модераторам.');
-    } catch (err) {
-        console.error('Ошибка отправки жалобы админу:', err);
-        ctx.answerCbQuery('❌ Ошибка при отправке жалобы.');
-    }
-});
-
-bot.action(/^admin_block_(.+)/, (ctx) => {
-    if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('🚫 Доступ запрещен.');
-
-    const linkId = ctx.match[1];
-    const links = getLinks();
-    const link = links.find((l) => l.id === linkId);
-
-    if (!link) return ctx.answerCbQuery('❌ Сслка не найдена.');
-
-    link.isBlocked = true;
-    saveLinks(links);
-
-    ctx.editMessageText(`✅ Сслка ${linkId} заблокирована.\n👤 Автор: @${link.creator}`);
-    ctx.answerCbQuery('Заблокировано.');
-});
-
-bot.command('block', (ctx) => {
-    if (!isAdmin(ctx.from.id)) return ctx.reply('🚫 У вас нет прав администратора.');
-
-    const args = ctx.message.text.split(' ');
-    if (args.length < 2) return ctx.reply('Использование: /block <id_сслки>');
-
-    const linkId = args[1];
-    const links = getLinks();
-    const link = links.find((l) => l.id === linkId);
-
-    if (!link) return ctx.reply(`❌ Сслка с ID ${linkId} не найдена.`);
-
-    link.isBlocked = true;
-    saveLinks(links);
-    ctx.reply(`✅ Сслка ${linkId} заблокирована.\n👤 Автор: @${link.creator}`);
-});
-
-bot.command('unblock', (ctx) => {
-    if (!isAdmin(ctx.from.id)) return ctx.reply('🚫 У вас нет прав администратора.');
-
-    const args = ctx.message.text.split(' ');
-    if (args.length < 2) return ctx.reply('Использование: /unblock <id_сслки>');
-
-    const linkId = args[1];
-    const links = getLinks();
-    const link = links.find((l) => l.id === linkId);
-
-    if (!link) return ctx.reply(`❌ Сслка с ID ${linkId} не найдена.`);
-
-    link.isBlocked = false;
-    saveLinks(links);
-    ctx.reply(`✅ Сслка ${linkId} разблокирована.`);
-});
 
 bot.command('stats', (ctx) => {
     if (!isAdmin(ctx.from.id)) return ctx.reply('🚫 У вас нет прав администратора.');
